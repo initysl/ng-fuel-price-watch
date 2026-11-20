@@ -1,0 +1,25 @@
+# Secrets
+.env
+
+# Raw downloaded files (kept locally / in object storage, never in git)
+landing/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Web (Next.js)
+web/node_modules/
+web/.next/
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
