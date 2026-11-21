@@ -204,8 +204,9 @@ The *national* and *zone* averages, however, are plain unweighted means of state
 
 ### D11. Ignore derived and decorative blocks
 - **Why:** title, narrative, YoY/MoM rows, top/bottom-3, `MAX`/`MIN` helpers are all
-  derivable or noise. The top/bottom-3 block becomes a WARN-level cross-check
-  of our ranking. The zone block must be found **anywhere on the sheet** by zone name (it moved
+  derivable or noise. The top/bottom-3 block is not read at all (Step 4, D26): it is computed by
+  NBS from the same state values, so it adds no check that the national and zone checks don't
+  already make. The zone block must be found **anywhere on the sheet** by zone name (it moved
   to column A in Jan 2026).
 
 ### D12. Load the year-ago columns too: history starts Nov 2023
@@ -327,6 +328,29 @@ LPG unit (`NGN/kg`) is provisional until the Phase 2 reports are inspected.
   `verify_raw_file()` is the same check, for extract and backfill to call.
 - Only `.xlsx` files are tracked. PDFs are skipped silently (D5); anything else, such as a zip
   that was not unpacked, is skipped with a WARN.
+
+---
+
+## Step 4: Extract
+
+`pipeline/extract/excel.py` → `extract_report(path) -> RawReport`. `python -m pipeline.extract`
+verifies and extracts every pending file and prints a summary; it writes nothing.
+
+### D26. Extract returns three raw tables and checks only structure
+- **Output (`RawReport`):** `states` (37 rows: `label_raw` plus one column per header month),
+  `national` (the `AVERAGE` row, same columns), and `zones` (`zone_raw`, `price_raw`; current
+  month only). Values are exactly as written: labels unmapped, prices at full precision.
+- **Checks, all `LayoutChangedError` naming the file and the cell:** one visible sheet; a header
+  row (D1); months are (M-12, M-1, M) (D2); exactly 37 non-empty labels between the header
+  and `AVERAGE`; every price cell has a cached value (D8); exactly one `Zone` cell, followed by
+  the 6 zones. Unknown state names are transform's job (Step 5); ranges and cross-checks are
+  validate's (Step 6).
+- **Not read:** title, narrative, YoY/MoM, top/bottom-3 (D11), helper columns.
+- **The hash check (D3)** happens in the caller (`verify_raw_file`, then `extract_report`), which
+  keeps extract a pure function of a file.
+- **Verified:** 19/19 real files extract. For every one of the 57 vintage-months, the mean of
+  the 37 extracted states equals the extracted `AVERAGE` (difference < 1e-9), so the right rows
+  were read.
 
 ---
 
