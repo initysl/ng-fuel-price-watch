@@ -221,6 +221,63 @@ The *national* and *zone* averages, however, are plain unweighted means of state
 
 ---
 
+## Step 2: Database schema and seeds
+
+`sql/001_schemas.sql` → `002_raw_tables.sql` → `003_core_tables.sql`, seeds in `seeds/`, run with
+`python -m pipeline.setup`.
+
+### D15. `core` is a star schema with two fact tables (a fact constellation)
+- **Facts:** `fact_fuel_price_state` (grain: product × state × month × vintage) and
+  `fact_fuel_price_aggregate` (product × national/zone area × month × vintage).
+  **Dimensions:** `dim_state`, `dim_product`.
+- **Alternatives:** one fact table with a level column; a snowflaked `dim_zone`; a `dim_date`.
+- **Why:** separate grains can never be summed together by accident. Zone is a plain attribute of
+  `dim_state` (6 values, no attributes of its own), so a `dim_zone` would add a join and nothing
+  else. With monthly grain, a first-of-month `date` column is enough; add `dim_month` only if
+  fiscal periods are ever needed. `state_alias` is a transform-time lookup, not a dimension, and
+  `raw.ingestion_log` is lineage.
+
+### D16. Migration order is raw before core
+- **Why:** both fact tables reference `raw.ingestion_log (file_id)`. The blueprint's order
+  (core before raw) fails on the foreign key. `raw.ingestion_log` deliberately has **no** foreign
+  key into `core`, so the raw layer never depends on the conformed layer.
+
+### D17. `ingestion_log.sha256` is not unique; a partial unique index enforces one success
+- **Alternatives:** `sha256 UNIQUE` (blueprint).
+- **Why:** with a plain unique constraint, logging a `skipped_duplicate` row violates it, and a
+  `failed` file could never be retried. `UNIQUE (sha256) WHERE status = 'success'` allows
+  retries and duplicate logging, and still prevents loading the same content twice. `status` also
+  includes `running` (Step 7 inserts it first), and a `failed` row must carry an `error_message`.
+
+### D18. Business rules live in constraints, not only in Python
+- Prices are `numeric(14,6)` and `> 0` (D4). Both date columns must be first-of-month, and
+  `price_month <= report_vintage`. Aggregate rows must be `national/Nigeria` or `zone/<one of 6>`.
+  Codes are checked against their patterns (`NG-XX`, `XXX`). Validation in Python (Step 6) gives
+  clear messages; the constraints are the last line of defence.
+
+### D19. Seeds are upserted (`ON CONFLICT … DO UPDATE`); removals only warn
+- **Alternatives:** `DO NOTHING` (blueprint); truncate and reload.
+- **Why:** `DO NOTHING` silently ignores a corrected CSV row, and truncating breaks foreign keys
+  from the fact tables. Rows deleted from a CSV are reported as a warning, never deleted, because
+  facts may still reference them.
+
+### D20. `CREATE … IF NOT EXISTS` makes setup re-runnable, but it is not a migration tool
+- **Why:** an existing table is never altered by re-running `003`. Any change after first deploy
+  goes into a **new numbered file** (`004_…`). Alembic is not worth it for 6 tables. Revisit if
+  the schema starts changing often.
+
+### D21. DB tests run on a throwaway `<db>_test` database
+- **Why:** each test session drops and recreates it. The fixture refuses any database name not
+  ending in `_test`. Locally the DB tests skip if Postgres is down; CI sets `REQUIRE_DB=1` so they
+  fail instead, and uses a Postgres 16 service container.
+
+Seed notes: `state_alias.csv` = 37 canonical names (normalised) + observed `abuja`, `nassarawa`
++ starter variants (`fct`, `fct abuja`, `akwaibom`, `crossriver`), 43 rows. It is generated
+with `pipeline.transform.normalise_state_name`, so seeds and lookups use identical rules. The
+LPG unit (`NGN/kg`) is provisional until the Phase 2 reports are inspected.
+
+---
+
 ## Open questions
 1. Is the Jan 2025 North Central error (Kwara omitted) corrected anywhere by NBS? Not in later reports.
 2. Why were Jan–Apr 2025 so dispersed? It's a candidate "finding" for the README. Hypotheses only.
