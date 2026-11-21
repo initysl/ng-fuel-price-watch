@@ -1405,7 +1405,6 @@ dependencies = [
     { name = "prefect" },
     { name = "psycopg", extra = ["binary"] },
     { name = "python-dotenv" },
-    { name = "requests" },
     { name = "sqlalchemy" },
 ]
 
@@ -1426,7 +1425,6 @@ requires-dist = [
     { name = "prefect", specifier = ">=3" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.9" },
     { name = "python-dotenv", specifier = ">=1.2.4" },
-    { name = "requests", specifier = ">=2.34.2" },
     { name = "sqlalchemy", specifier = ">=2" },
 ]
 

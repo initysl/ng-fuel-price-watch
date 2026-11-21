@@ -13,3 +13,8 @@ SQL_DIR = PROJECT_ROOT / "sql"
 SEEDS_DIR = PROJECT_ROOT / "seeds"
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+# Where new releases are downloaded by hand (D22): the study's "Related materials" page.
+NBS_PMS_CATALOGUE_URL = (
+    "https://microdata.nigerianstat.gov.ng/index.php/catalog/157/related-materials"
+)

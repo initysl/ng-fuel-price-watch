@@ -162,10 +162,13 @@ The *national* and *zone* averages, however, are plain unweighted means of state
 - **Why:** 2-dp storage misses 2 of 57 published national figures. Full precision plus
   Postgres `round(…, 2)` reproduces all 57, including Excel's 15-digit rounding (see *Rounding*).
 
-### D5. xlsx only in v1; PDFs archived but not parsed
-- **Alternatives:** a PDF extractor as a fallback (blueprint Step 4).
+### D5. xlsx only; PDFs are not tracked
+- **Alternatives:** a PDF extractor as a fallback (blueprint Step 4); hashing and logging PDFs
+  as archive copies.
 - **Why:** every release has an xlsx. The PDF appendix was stale in one release and broke table
-  extraction in two more, so it is a worse source, not a fallback. Revisit only if a release is
+  extraction in two more, so it is a worse source, not a fallback. The only fact taken from the
+  PDFs (release dates, from their creation dates) is recorded above. PDFs may stay in
+  `landing/` for reference, but acquire ignores them (Step 3). Revisit only if a release is
   ever PDF-only.
 
 ### D6. National check is a strict ERROR; zones are computed, and published zones are a WARN
@@ -247,7 +250,7 @@ The *national* and *zone* averages, however, are plain unweighted means of state
 - **Why:** with a plain unique constraint, logging a `skipped_duplicate` row violates it, and a
   `failed` file could never be retried. `UNIQUE (sha256) WHERE status = 'success'` allows
   retries and duplicate logging, and still prevents loading the same content twice. `status` also
-  includes `running` (Step 7 inserts it first), and a `failed` row must carry an `error_message`.
+  includes `running` (acquire inserts it, D23), and a `failed` row must carry an `error_message`.
 
 ### D18. Business rules live in constraints, not only in Python
 - Prices are `numeric(14,6)` and `> 0` (D4). Both date columns must be first-of-month, and
@@ -278,8 +281,58 @@ LPG unit (`NGN/kg`) is provisional until the Phase 2 reports are inspected.
 
 ---
 
+## Step 3: Acquire
+
+`python -m pipeline.acquire` registers the files in `landing/raw/pms/`. Code in
+`pipeline/acquire.py`, schema additions in `sql/004_ingestion_log_acquire.sql`.
+
+### D22. Files are downloaded by hand; acquire registers them
+- **Facts (checked 2026-11-21):** no API; the catalogue starts at Nov 2024; the latest report
+  anywhere (catalogue, NBS social posts, press) is **May 2026**, released 2026-06-24.
+- **Alternatives:** an automatic downloader that reads the *Related materials* page and fetches
+  new links (built, tested against the real site, then removed).
+- **Why:** NBS publishes at most monthly, at irregular times, and has been silent since May 2026.
+  The downloader (page parsing, HTTP retries, safe unzipping) more than doubled the code for a
+  job that takes a minute by hand a few times a year. What the pipeline really needs from Step 3
+  is registration: every fact row needs a `file_id`, and duplicates and edited raw files must
+  be caught. A one-off check with that downloader confirmed all 38 local files are
+  **byte-identical** to the catalogue's.
+- **How to add a release:** download it from the catalogue's *Related materials*
+  (`config.NBS_PMS_CATALOGUE_URL`), unzip it, put its files in
+  `landing/raw/pms/<YYYY-MM>/` with their original names, run `python -m pipeline.acquire`.
+- **Consequences:** the freshness rule (blueprint rule 10) is *expected* to WARN now, and the
+  dashboard and README must say "latest NBS data: May 2026" plainly. Step 10 cannot fetch on a
+  schedule; the flow runs after a drop-in. Revisit the downloader if runs move to the cloud
+  or NBS starts publishing reliably.
+
+### D23. Status lifecycle: acquire opens the attempt
+- `running` = registered, waiting for extract → load (Step 7 sets `success` / `failed`).
+  `skipped_duplicate` = a copy of content already held.
+- A `running` row is reused on the next run, so acquire is idempotent even before Step 7 exists.
+  A `failed` file gets a **new** `running` row (one row per attempt).
+- `004` adds `UNIQUE (sha256) WHERE status IN ('running','success')`: one owner per
+  content. It also requires `landing_path` on every row that is not a duplicate.
+
+### D24. Landing layout stays `landing/raw/pms/<YYYY-MM>/<original name>`
+- **Alternatives:** blueprint `<YYYY-MM>_<hash8>.<ext>`.
+- **Why:** original names keep traceability, and the folder is only a convenience. The report
+  month stored in `report_vintage` comes from the **xlsx header** (D2, via
+  `extract.excel.read_report_month`; 19/19 real files match their folder, including
+  `PMS_JANUARY_2025.xlsx` → 2026-01). If the folder disagrees with the header, that is a WARN.
+  Paths are stored relative to `landing/raw/` in `landing_path`.
+
+### D25. Raw files become read-only once logged, and are re-hashed on every run (D3)
+- A logged file whose hash changed raises `RawFileModifiedError`; the fix is to restore or
+  re-download, never to edit. A logged file missing from disk is a WARN.
+  `verify_raw_file()` is the same check, for extract and backfill to call.
+- Only `.xlsx` files are tracked. PDFs are skipped silently (D5); anything else, such as a zip
+  that was not unpacked, is skipped with a WARN.
+
+---
+
 ## Open questions
 1. Is the Jan 2025 North Central error (Kwara omitted) corrected anywhere by NBS? Not in later reports.
 2. Why were Jan–Apr 2025 so dispersed? It's a candidate "finding" for the README. Hypotheses only.
-3. Does a stable listing or API exist for the catalogue (for Step 3), or do we scrape
-   *Related materials* (resource ids increase with publication order)?
+3. ~~Does a stable listing or API exist for the catalogue?~~ No API; the *Related materials*
+   page is the listing; files are downloaded from it by hand (D22).
+4. Will NBS publish Jun–Oct 2026? Nothing since May 2026 as of 2026-11-21 (D22).

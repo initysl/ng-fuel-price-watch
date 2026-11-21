@@ -19,13 +19,13 @@ def scalar(engine, sql, **params):
         return conn.execute(text(sql), params).scalar_one()
 
 
-def new_file(conn, sha=SHA_A, status="success") -> int:
+def new_file(conn, sha=SHA_A, status="success", landing_path="pms/test.xlsx") -> int:
     return conn.execute(
         text(
-            "INSERT INTO raw.ingestion_log (file_name, sha256, status) "
-            "VALUES ('test.xlsx', :sha, :status) RETURNING file_id"
+            "INSERT INTO raw.ingestion_log (file_name, sha256, status, landing_path) "
+            "VALUES ('test.xlsx', :sha, :status, :path) RETURNING file_id"
         ),
-        {"sha": sha, "status": status},
+        {"sha": sha, "status": status, "path": landing_path},
     ).scalar_one()
 
 
@@ -103,16 +103,32 @@ def test_duplicate_successful_load_is_rejected_but_retries_are_allowed(engine):
         trans = conn.begin()
         conn.execute(
             text(
-                "INSERT INTO raw.ingestion_log (file_name, sha256, status, error_message) "
-                "VALUES ('f.xlsx', :sha, 'failed', 'boom')"
+                "INSERT INTO raw.ingestion_log (file_name, sha256, status, error_message, "
+                "landing_path) VALUES ('f.xlsx', :sha, 'failed', 'boom', 'pms/f.xlsx')"
             ),
             {"sha": SHA_B},
         )
-        new_file(conn, SHA_B, "skipped_duplicate")
+        new_file(conn, SHA_B, "skipped_duplicate", landing_path=None)
         new_file(conn, SHA_B, "success")  # a failed + a skipped row don't block a success
         with pytest.raises(IntegrityError):
             new_file(conn, SHA_B, "success")  # but a second success does
         trans.rollback()
+
+
+@pytest.mark.parametrize("second", ["running", "success"])
+def test_content_has_one_active_owner(engine, second):
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        new_file(conn, SHA_B, "running")
+        new_file(conn, SHA_B, second, landing_path="pms/copy.xlsx")
+
+
+def test_kept_files_need_a_landing_path_but_duplicates_do_not(engine):
+    with engine.connect() as conn:
+        trans = conn.begin()
+        new_file(conn, SHA_A, "skipped_duplicate", landing_path=None)
+        trans.rollback()
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        new_file(conn, SHA_A, "running", landing_path=None)
 
 
 @pytest.mark.parametrize(
