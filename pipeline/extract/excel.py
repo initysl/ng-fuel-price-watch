@@ -38,6 +38,7 @@ class RawReport:
 
 # Reading the sheet
 
+
 def _cell(row: tuple, col: int):
     return row[col] if col < len(row) else None
 
@@ -97,6 +98,7 @@ def read_report_month(source: Path | bytes) -> dt.date | None:
 
 
 # Extracting the blocks
+
 
 def _require_value(value, name: str, where: str):
     """D8: a price cell must hold a value, not be empty or an uncached formula."""
