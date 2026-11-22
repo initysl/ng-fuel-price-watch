@@ -19,7 +19,6 @@ def normalise_state_name(name: str) -> str:
 
 # Stage 1: wide -> long
 
-
 def to_long(wide: pd.DataFrame) -> pd.DataFrame:
     """One row per (label, month): ``label_raw | price_month | price_raw``.
 
@@ -62,3 +61,29 @@ def clean_prices(long: pd.DataFrame) -> pd.DataFrame:
         ]
         raise BadPriceError(f"{len(cells)} price cell(s) are not numbers:\n" + "\n".join(cells))
     return long.drop(columns="price_raw").assign(avg_price_ngn=prices.astype("float64"))
+
+
+# Stage 3: map names
+
+class UnknownStateError(ValueError):
+    """A state label isn't in ``core.state_alias``. The message lists every unknown label once."""
+
+
+def map_states(clean: pd.DataFrame, aliases: dict[str, str]) -> pd.DataFrame:
+    """Swap ``label_raw`` for ``state_code``: ``state_code | price_month | avg_price_ngn``.
+
+    ``aliases`` maps normalised names to codes, as in ``core.state_alias``
+    (``"abuja" -> "NG-FC"``). It is passed in so transform never touches the database.
+    An unknown label raises UnknownStateError: add its normalised name to
+    ``seeds/state_alias.csv`` (only once you've confirmed which state it is) and rerun.
+    """
+    normalised = clean["label_raw"].map(normalise_state_name)
+    codes = normalised.map(aliases)  # a missing key gives NaN, not an error
+    unknown = codes.isna()
+    if unknown.any():
+        labels = dict.fromkeys(clean.loc[unknown, "label_raw"])  # each label once, in file order
+        lines = [f"  {label!r} (normalised: {normalise_state_name(label)!r})" for label in labels]
+        raise UnknownStateError(
+            f"{len(labels)} state label(s) not in state_alias:\n" + "\n".join(lines)
+        )
+    return clean.assign(state_code=codes)[["state_code", "price_month", "avg_price_ngn"]]

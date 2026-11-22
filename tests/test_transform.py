@@ -5,7 +5,7 @@ import datetime as dt
 import pandas as pd
 import pytest
 
-from pipeline.transform import BadPriceError, clean_prices, to_long
+from pipeline.transform import BadPriceError, UnknownStateError, clean_prices, map_states, to_long
 
 MAY_25, APR, MAY = dt.date(2025, 5, 1), dt.date(2026, 4, 1), dt.date(2026, 5, 1)
 
@@ -73,3 +73,45 @@ def test_clean_prices_reports_every_bad_cell():
 def test_clean_prices_rejects_values_that_are_not_numbers(bad):
     with pytest.raises(BadPriceError):
         clean_prices(to_long(wide_table(["Lagos", bad, 1.0, 2.0])))
+
+
+# A tiny alias table: transform gets a dict, so these tests need no database.
+ALIASES = {"abuja": "NG-FC", "nassarawa": "NG-NA", "akwa ibom": "NG-AK", "lagos": "NG-LA"}
+
+
+def clean_table(*rows: list) -> pd.DataFrame:
+    """What stage 3 receives: the output of stages 1 and 2."""
+    return clean_prices(to_long(wide_table(*rows)))
+
+
+def test_map_states_resolves_each_spelling_to_its_code():
+    clean = clean_table(
+        ["Abuja", 1.0, 2.0, 3.0], ["Nassarawa ", 1.0, 2.0, 3.0], ["Akwa-Ibom State", 1.0, 2.0, 3.0]
+    )
+
+    mapped = map_states(clean, ALIASES)
+
+    assert mapped["state_code"].unique().tolist() == ["NG-FC", "NG-NA", "NG-AK"]
+    assert len(mapped) == 3 * 3  # no rows lost or added
+
+
+def test_map_states_output_columns():
+    mapped = map_states(clean_table(["Lagos", 1077.05, 1486.17, 1561.22]), ALIASES)
+
+    assert list(mapped.columns) == ["state_code", "price_month", "avg_price_ngn"]
+    assert mapped["avg_price_ngn"].tolist() == [1077.05, 1486.17, 1561.22]  # prices untouched
+
+
+def test_map_states_reports_each_unknown_label_once():
+    clean = clean_table(
+        ["Lagos", 1.0, 2.0, 3.0], ["Atlantis", 1.0, 2.0, 3.0], ["Wakanda State", 1.0, 2.0, 3.0]
+    )
+
+    with pytest.raises(UnknownStateError) as err:
+        map_states(clean, ALIASES)
+
+    message = str(err.value)
+    assert "2 state label(s)" in message
+    assert message.count("'Atlantis'") == 1  # 3 rows, but reported once
+    assert "'Wakanda State' (normalised: 'wakanda')" in message  # the row to add to the seed
+    assert "Lagos" not in message
