@@ -5,7 +5,15 @@ import datetime as dt
 import pandas as pd
 import pytest
 
-from pipeline.transform import BadPriceError, UnknownStateError, clean_prices, map_states, to_long
+from pipeline.transform import (
+    BadPriceError,
+    DuplicateKeyError,
+    UnknownStateError,
+    check_unique_states,
+    clean_prices,
+    map_states,
+    to_long,
+)
 
 MAY_25, APR, MAY = dt.date(2025, 5, 1), dt.date(2026, 4, 1), dt.date(2026, 5, 1)
 
@@ -98,7 +106,7 @@ def test_map_states_resolves_each_spelling_to_its_code():
 def test_map_states_output_columns():
     mapped = map_states(clean_table(["Lagos", 1077.05, 1486.17, 1561.22]), ALIASES)
 
-    assert list(mapped.columns) == ["state_code", "price_month", "avg_price_ngn"]
+    assert list(mapped.columns) == ["label_raw", "state_code", "price_month", "avg_price_ngn"]
     assert mapped["avg_price_ngn"].tolist() == [1077.05, 1486.17, 1561.22]  # prices untouched
 
 
@@ -115,3 +123,36 @@ def test_map_states_reports_each_unknown_label_once():
     assert message.count("'Atlantis'") == 1  # 3 rows, but reported once
     assert "'Wakanda State' (normalised: 'wakanda')" in message  # the row to add to the seed
     assert "Lagos" not in message
+
+
+# Two spellings of one state, to make stage 4 clash on purpose.
+CLASHING = {**ALIASES, "fct": "NG-FC"}
+
+
+def test_check_unique_states_names_the_clashing_labels_once():
+    mapped = map_states(
+        clean_table(["Abuja", 1.0, 2.0, 3.0], ["FCT", 4.0, 5.0, 6.0], ["Lagos", 1.0, 2.0, 3.0]),
+        CLASHING,
+    )
+
+    with pytest.raises(DuplicateKeyError) as err:
+        check_unique_states(mapped)
+
+    message = str(err.value)
+    assert "1 state code(s)" in message
+    assert "NG-FC: 'Abuja', 'FCT'" in message  # both labels, so you know what to fix
+    assert message.count("NG-FC") == 1  # the clash repeats in 3 months, but it's one problem
+    assert "Lagos" not in message
+
+
+def test_check_unique_states_fails_even_when_prices_match():
+    mapped = map_states(clean_table(["Abuja", 1.0, 2.0, 3.0], ["FCT", 1.0, 2.0, 3.0]), CLASHING)
+
+    with pytest.raises(DuplicateKeyError):
+        check_unique_states(mapped)
+
+
+def test_check_unique_states_passes_distinct_states_unchanged():
+    mapped = map_states(clean_table(["Abuja", 1.0, 2.0, 3.0], ["Lagos", 1.0, 2.0, 3.0]), ALIASES)
+
+    assert check_unique_states(mapped) is mapped  # the very same table, untouched

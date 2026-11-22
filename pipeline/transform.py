@@ -19,6 +19,7 @@ def normalise_state_name(name: str) -> str:
 
 # Stage 1: wide -> long
 
+
 def to_long(wide: pd.DataFrame) -> pd.DataFrame:
     """One row per (label, month): ``label_raw | price_month | price_raw``.
 
@@ -65,12 +66,13 @@ def clean_prices(long: pd.DataFrame) -> pd.DataFrame:
 
 # Stage 3: map names
 
+
 class UnknownStateError(ValueError):
     """A state label isn't in ``core.state_alias``. The message lists every unknown label once."""
 
 
 def map_states(clean: pd.DataFrame, aliases: dict[str, str]) -> pd.DataFrame:
-    """Swap ``label_raw`` for ``state_code``: ``state_code | price_month | avg_price_ngn``.
+    """Add ``state_code``: ``label_raw | state_code | price_month | avg_price_ngn``.
 
     ``aliases`` maps normalised names to codes, as in ``core.state_alias``
     (``"abuja" -> "NG-FC"``). It is passed in so transform never touches the database.
@@ -86,4 +88,33 @@ def map_states(clean: pd.DataFrame, aliases: dict[str, str]) -> pd.DataFrame:
         raise UnknownStateError(
             f"{len(labels)} state label(s) not in state_alias:\n" + "\n".join(lines)
         )
-    return clean.assign(state_code=codes)[["state_code", "price_month", "avg_price_ngn"]]
+    # label_raw stays so stage 4 can name clashing labels; stage 5 sets the final columns.
+    return clean.assign(state_code=codes)[
+        ["label_raw", "state_code", "price_month", "avg_price_ngn"]
+    ]
+
+
+# Stage 4: duplicate keys
+
+
+class DuplicateKeyError(ValueError):
+    """Two rows share a (state_code, price_month): usually two labels mapped to one state."""
+
+
+def check_unique_states(mapped: pd.DataFrame) -> pd.DataFrame:
+    """Raise if any (state_code, price_month) appears twice; otherwise return ``mapped`` unchanged.
+
+    A clash means two raw labels resolved to one state (``"Abuja"`` and ``"FCT"`` both
+    ``NG-FC``), so another state has no row. It fails even if the prices match: it's a mapping
+    mistake, whatever the numbers say. Each clash is reported once, by state code, with its labels.
+    """
+    dupe = mapped.duplicated(subset=["state_code", "price_month"], keep=False)
+    if dupe.any():
+        # Group by code alone: a clash repeats in every month, but it's one problem.
+        labels = mapped[dupe].groupby("state_code", sort=False)["label_raw"].unique()
+        lines = [f"  {code}: {', '.join(map(repr, names))}" for code, names in labels.items()]
+        raise DuplicateKeyError(
+            f"{len(lines)} state code(s) appear more than once (check state_alias):\n"
+            + "\n".join(lines)
+        )
+    return mapped

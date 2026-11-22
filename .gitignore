@@ -1,8 +1,9 @@
 # Secrets
 .env
 
-# Private project blueprint (kept locally, not published)
+# Private project blueprint and study guide (kept locally, not published)
 petrol-price-watch-project.md
+docs/approach.md
 
 # Raw downloaded files (kept locally / in object storage, never in git)
 landing/
